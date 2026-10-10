@@ -4,8 +4,11 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from science_research.db import create_project, list_projects, save_analysis_run, save_methodology, save_paper, save_question
+from science_research.models.paper import Paper
 from science_research.services.analysis_service import AnalysisService
+from science_research.services.citation_service import CitationService
 from science_research.services.institutional_access_service import InstitutionalAccessService
+from science_research.services.project_workspace_service import ProjectWorkspaceService
 from science_research.services.report_service import ReportService
 from science_research.services.research_plan_service import ResearchPlanService
 from science_research.services.search_service import SearchService, ScopusProvider
@@ -14,6 +17,7 @@ from science_research.services.review_service import ReviewService
 from science_research.services.source_registry_service import SourceRegistryService
 
 router = APIRouter(prefix="/api")
+workspace_service = ProjectWorkspaceService()
 
 
 class ProjectCreateRequest(BaseModel):
@@ -58,6 +62,35 @@ def create_project_endpoint(payload: ProjectCreateRequest):
 @router.get("/projects")
 def get_projects():
     return {"projects": list_projects()}
+
+
+@router.get("/projects/{project_id}/workspace")
+def get_project_workspace(project_id: str):
+    project = workspace_service.get_project(project_id)
+    if project is None:
+        return {"error": "Project not found"}
+    return workspace_service.summary(project_id)
+
+
+@router.post("/projects/{project_id}/literature")
+def add_project_literature(project_id: str, paper: Paper):
+    workspace_service.add_paper(project_id, paper)
+    return {"project_id": project_id, "paper": paper.model_dump()}
+
+
+@router.get("/projects/{project_id}/citations")
+def get_project_citations(project_id: str, format: str = "json"):
+    project = workspace_service.get_project(project_id)
+    if project is None:
+        return {"error": "Project not found"}
+    bundle = workspace_service.summary(project_id)
+    citations = CitationService.from_papers([
+        Paper(**paper) if isinstance(paper, dict) else paper
+        for paper in bundle["project"].model_extra.get("selected_papers", [])
+    ]) if bundle["project"].model_extra.get("selected_papers") else []
+    if format == "bibtex":
+        return {"project_id": project_id, "bibtex": "\n\n".join(c.to_bibtex() for c in citations)}
+    return {"project_id": project_id, "citations": [c.to_dict() for c in citations]}
 
 
 @router.get("/literature/search")
