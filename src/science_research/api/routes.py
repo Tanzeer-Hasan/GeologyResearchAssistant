@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from science_research.services.analysis_service import AnalysisService
+from science_research.services.report_service import ReportService
 from science_research.services.research_plan_service import ResearchPlanService
 from science_research.services.search_service import SearchService, ScopusProvider
 from science_research.services.screening_service import ScreeningService
@@ -70,3 +72,26 @@ def generate_research_plan(topic: str, domain: str = "general", gap: str | None 
     ]
     service = ResearchPlanService()
     return service.build_plan(topic, gaps, domain=domain)
+
+
+@router.get("/analysis/run")
+def run_analysis(topic: str, domain: str = "general"):
+    analysis_service = AnalysisService()
+    return analysis_service.run(topic, domain=domain)
+
+
+@router.get("/report/summary")
+def generate_report(topic: str, domain: str = "general", question: str | None = None):
+    question_text = question or "How can this research topic be investigated more reliably and reproducibly?"
+    plan_service = ResearchPlanService()
+    plan = plan_service.build_plan(topic, ["Need for stronger methodological consistency and validation."], domain=domain)
+    analysis_service = AnalysisService()
+    analysis = analysis_service.run(topic, domain=domain)
+    report_service = ReportService()
+    return report_service.generate_report(
+        topic=topic,
+        domain=domain,
+        selected_question=question_text,
+        methodology=plan["methodology"],
+        analysis=analysis,
+    )
