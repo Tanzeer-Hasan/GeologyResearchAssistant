@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
+from science_research.db import create_project, list_projects, save_analysis_run, save_methodology, save_paper, save_question
 from science_research.services.analysis_service import AnalysisService
 from science_research.services.report_service import ReportService
 from science_research.services.research_plan_service import ResearchPlanService
@@ -12,18 +14,40 @@ from science_research.services.review_service import ReviewService
 router = APIRouter(prefix="/api")
 
 
+class ProjectCreateRequest(BaseModel):
+    title: str
+    domain: str
+    description: str = ""
+
+
 @router.get("/health")
 def health():
     return {"status": "ok", "service": "ScienceAndEngineeringResearchAssistant"}
 
 
+@router.post("/projects")
+def create_project_endpoint(payload: ProjectCreateRequest):
+    project = create_project(payload.title, payload.domain, payload.description)
+    return {"project": project}
+
+
+@router.get("/projects")
+def get_projects():
+    return {"projects": list_projects()}
+
+
 @router.get("/literature/search")
-def search_literature(query: str, domain: str = "general", limit: int = 10):
+def search_literature(query: str, domain: str = "general", limit: int = 10, project_id: int | None = None):
     providers = [ScopusProvider(api_key=None)]
     service = SearchService(providers=providers)
     papers = service.search(query, domain=domain, limit=limit)
     screened = ScreeningService().screen(papers, domain=domain)
     review = ReviewService()
+
+    if project_id is not None:
+        for paper in screened:
+            save_paper(project_id, paper.model_dump())
+
     return {
         "query": query,
         "domain": domain,
@@ -35,13 +59,16 @@ def search_literature(query: str, domain: str = "general", limit: int = 10):
 
 
 @router.get("/research/questions")
-def generate_questions(topic: str, domain: str = "general", gap: str | None = None):
+def generate_questions(topic: str, domain: str = "general", gap: str | None = None, project_id: int | None = None):
     gaps = [gap] if gap else [
         "Limited integration of multi-source evidence across disciplines.",
         "Sparse validation against independent datasets or field measurements.",
     ]
     service = ResearchPlanService()
     plan = service.build_plan(topic, gaps, domain=domain)
+    if project_id is not None:
+        for question in plan["questions"]:
+            save_question(project_id, question)
     return {
         "topic": topic,
         "domain": domain,
@@ -51,33 +78,42 @@ def generate_questions(topic: str, domain: str = "general", gap: str | None = No
 
 
 @router.get("/research/methodology")
-def generate_methodology(topic: str, question: str, domain: str = "general"):
+def generate_methodology(topic: str, question: str, domain: str = "general", project_id: int | None = None):
     service = ResearchPlanService()
-    plan = service.build_plan(topic, ["Methodological gap detection required from literature review."], domain=domain)
-    plan["selected_question"] = {"text": question}
+    methodology = service.methodology_service.design(topic, question, domain=domain)
+    if project_id is not None:
+        save_methodology(project_id, methodology)
     return {
         "topic": topic,
         "domain": domain,
         "selected_question": question,
-        "methodology": service.methodology_service.design(topic, question, domain=domain),
+        "methodology": methodology,
     }
 
 
 @router.get("/research/plan")
-def generate_research_plan(topic: str, domain: str = "general", gap: str | None = None):
+def generate_research_plan(topic: str, domain: str = "general", gap: str | None = None, project_id: int | None = None):
     gaps = [gap] if gap else [
         "Limited integration of multi-source evidence across disciplines.",
         "Sparse validation against independent datasets or field measurements.",
         "Insufficient long-term comparative analysis across relevant conditions.",
     ]
     service = ResearchPlanService()
-    return service.build_plan(topic, gaps, domain=domain)
+    plan = service.build_plan(topic, gaps, domain=domain)
+    if project_id is not None:
+        for question in plan["questions"]:
+            save_question(project_id, question)
+        save_methodology(project_id, plan["methodology"])
+    return plan
 
 
 @router.get("/analysis/run")
-def run_analysis(topic: str, domain: str = "general"):
+def run_analysis(topic: str, domain: str = "general", project_id: int | None = None):
     analysis_service = AnalysisService()
-    return analysis_service.run(topic, domain=domain)
+    results = analysis_service.run(topic, domain=domain)
+    if project_id is not None:
+        save_analysis_run(project_id, topic, domain, results)
+    return results
 
 
 @router.get("/report/summary")
