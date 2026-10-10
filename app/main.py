@@ -1,6 +1,19 @@
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+
 from fastapi import FastAPI
 
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from science_research.api.routes import router as science_router
+
 app = FastAPI(title="Science and Engineering Research Assistant")
+app.include_router(science_router)
 
 
 @app.get("/health")
