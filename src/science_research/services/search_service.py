@@ -3,6 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import List
 
+import httpx
+
 from science_research.models.paper import Paper
 
 
@@ -42,12 +44,93 @@ class ScopusProvider(SearchProvider):
 
 class CrossrefProvider(SearchProvider):
     def search(self, query: str, *, domain: str = "general", limit: int = 20) -> List[Paper]:
-        return []
+        params = {
+            "query.title": query,
+            "rows": limit,
+            "select": "title,author,issued,container-title,DOI,URL,abstract",
+        }
+        headers = {"User-Agent": "ScienceResearchAssistant/0.1"}
+        try:
+            response = httpx.get("https://api.crossref.org/works", params=params, headers=headers, timeout=20.0)
+            response.raise_for_status()
+        except Exception:
+            return []
+
+        items = response.json().get("message", {}).get("items", [])
+        papers: List[Paper] = []
+        for item in items[:limit]:
+            title = item.get("title", [""])[0] if item.get("title") else ""
+            authors = [a.get("family", "") for a in item.get("author", []) if a.get("family")]
+            issued = item.get("issued", {}).get("date-parts", [[None]])[0][0]
+            journal = item.get("container-title", [None])[0]
+            doi = item.get("DOI")
+            url = item.get("URL")
+            abstract = item.get("abstract")
+            if abstract:
+                abstract = abstract.replace("\n", " ")
+            papers.append(
+                Paper(
+                    paper_id=f"crossref-{doi or title.lower().replace(' ', '-')}",
+                    title=title,
+                    authors=authors,
+                    year=issued,
+                    journal=journal,
+                    doi=doi,
+                    url=url,
+                    abstract=abstract,
+                    keywords=[domain, "crossref"],
+                    source="crossref",
+                    peer_reviewed=True,
+                    full_text_available=False,
+                    access_type="metadata_only",
+                )
+            )
+        return papers
 
 
 class OpenAlexProvider(SearchProvider):
     def search(self, query: str, *, domain: str = "general", limit: int = 20) -> List[Paper]:
-        return []
+        params = {
+            "search": query,
+            "per-page": limit,
+        }
+        try:
+            response = httpx.get("https://api.openalex.org/works", params=params, timeout=20.0)
+            response.raise_for_status()
+        except Exception:
+            return []
+
+        papers: List[Paper] = []
+        for item in response.json().get("results", [])[:limit]:
+            title = item.get("display_name") or ""
+            authors = [a.get("author", {}).get("display_name") for a in item.get("authorships", []) if a.get("author")]
+            year = item.get("publication_year")
+            journal = item.get("primary_location", {}).get("source", {}).get("display_name")
+            doi = item.get("doi")
+            url = item.get("id")
+            abstract = item.get("abstract_inverted_index")
+            abstract_text = ""
+            if abstract:
+                keys = list(abstract.keys())
+                abstract_text = " ".join(keys)
+            papers.append(
+                Paper(
+                    paper_id=f"openalex-{doi or title.lower().replace(' ', '-')}",
+                    title=title,
+                    authors=authors,
+                    year=year,
+                    journal=journal,
+                    doi=doi,
+                    url=url,
+                    abstract=abstract_text,
+                    keywords=[domain, "openalex"],
+                    source="openalex",
+                    peer_reviewed=True,
+                    full_text_available=False,
+                    access_type="metadata_only",
+                )
+            )
+        return papers
 
 
 class GoogleScholarProvider(SearchProvider):
@@ -57,7 +140,10 @@ class GoogleScholarProvider(SearchProvider):
 
 class SearchService:
     def __init__(self, providers: list[SearchProvider] | None = None):
-        self.providers = providers or []
+        if providers is not None:
+            self.providers = providers
+        else:
+            self.providers = [CrossrefProvider(), OpenAlexProvider()]
 
     def search(self, query: str, *, domain: str = "general", limit: int = 20) -> List[Paper]:
         papers: List[Paper] = []
